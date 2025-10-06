@@ -1,0 +1,160 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Mxeaez Redeems Overlay</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root{
+      --bg: rgba(0,0,0,0);       /* transparent for OBS */
+      --toast-bg: rgba(18,18,18,.85);
+      --toast-border: rgba(255,255,255,.12);
+      --text: #fff;
+      --accent: #c6f6d5;
+      --gap: 12px;
+      --pad: 12px;
+      --radius: 14px;
+      --shadow: 0 12px 30px rgba(0,0,0,.45);
+      --enter-ms: 220ms;
+      --exit-ms: 300ms;
+      --font: ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+    }
+    html,body{ height:100%; margin:0; background:var(--bg); }
+    body{ font-family:var(--font); color:var(--text); overflow:hidden; }
+
+    /* Positions: br (bottom-right), bl, tr, tl */
+    .wrap{ position:fixed; inset:auto var(--gap) var(--gap) auto; display:flex; flex-direction:column; align-items:flex-end; gap:var(--gap); }
+    .wrap[data-pos="bl"]{ inset:auto auto var(--gap) var(--gap); align-items:flex-start; }
+    .wrap[data-pos="tr"]{ inset:var(--gap) var(--gap) auto auto; align-items:flex-end; }
+    .wrap[data-pos="tl"]{ inset:var(--gap) auto auto var(--gap); align-items:flex-start; }
+
+    .toast{
+      display:flex; gap:10px; align-items:center;
+      background:var(--toast-bg); border:1px solid var(--toast-border);
+      padding:var(--pad); border-radius:var(--radius); box-shadow:var(--shadow);
+      transform-origin: 100% 100%;
+      max-width: min(92vw, 540px);
+      animation: pop-in var(--enter-ms) ease-out forwards;
+    }
+    .wrap[data-pos="bl"] .toast, .wrap[data-pos="tl"] .toast { transform-origin: 0% 100%; }
+    .wrap[data-pos="tr"] .toast { transform-origin: 100% 0%; }
+    .wrap[data-pos="tl"] .toast { transform-origin: 0% 0%; }
+
+    .toast.exit { animation: fade-out var(--exit-ms) ease forwards; }
+
+    .icon{
+      width:48px; height:48px; border-radius:10px; flex:0 0 auto;
+      background:#111 center/cover no-repeat;
+      border:2px solid rgba(255,255,255,.12);
+    }
+    .content{ display:flex; flex-direction:column; gap:4px; }
+    .line{ font-weight:600; font-size:16px; line-height:1.2; }
+    .sub { font-size:12px; color:#cbd5e1; }
+
+    .rarity{ font-size:10px; padding:2px 6px; border-radius:999px; border:1px solid rgba(255,255,255,.2); margin-left:6px; opacity:.9 }
+    .r-common { color:#9ca3af; }
+    .r-rare   { color:#93c5fd; }
+    .r-unique { color:#fde047; }
+    .r-legend { color:#34d399; }
+
+    @keyframes pop-in { from{ opacity:0; transform:translateY(6px) scale(.96) } to{ opacity:1; transform:translateY(0) scale(1) } }
+    @keyframes fade-out { from{ opacity:1; transform:translateY(0) scale(1) } to{ opacity:0; transform:translateY(6px) scale(.98) } }
+  </style>
+</head>
+<body>
+  <div id="wrap" class="wrap" data-pos="br"></div>
+
+  <script>
+    (function(){
+      // ---- Options via query string
+      const q = new URLSearchParams(location.search);
+      const channelId = q.get("channel_id") || "";           // REQUIRED
+      const pos = (q.get("pos") || "br").toLowerCase();      // br|bl|tr|tl
+      const duration = Math.max(800, Number(q.get("dur")||"4000"));
+      const showRarity = (q.get("rarity")||"1") !== "0";
+
+      const wrap = document.getElementById("wrap");
+      wrap.dataset.pos = pos;
+
+      // ---- Cache catalog for icon/rarity/name
+      const catalogById = {};
+      fetch("/catalog", { cache: "no-store" })
+        .then(r=>r.json())
+        .then(items=>{
+          for(const it of items||[]) catalogById[it.id] = it;
+        })
+        .catch(()=>{});
+
+      // ---- Connect to EBS WS
+      if(!channelId){
+        console.error("Missing ?channel_id=12345 in URL");
+        banner("Overlay not configured", "Add ?channel_id=YOUR_TWITCH_CHANNEL_ID to the URL");
+        return;
+      }
+      const wsUrl = (location.origin.startsWith("https:")
+        ? "wss://" + location.host
+        : "ws://" + location.host) + `/bridge?channel_id=${encodeURIComponent(channelId)}`;
+
+      let ws;
+      function connect(){
+        ws = new WebSocket(wsUrl);
+        ws.onopen = ()=>console.log("[overlay] ws open");
+        ws.onclose = ()=>{ console.log("[overlay] ws closed, retrying..."); setTimeout(connect, 2000); };
+        ws.onmessage = (ev)=>{
+          try {
+            const msg = JSON.parse(ev.data);
+            if (msg.type !== "redeem") return;
+
+            const viewer = (msg.viewer && (msg.viewer.login || msg.viewer.userId)) || "Someone";
+            const itemId = msg.itemId;
+            const itemName = msg.itemName || itemId;
+
+            const inCat = catalogById[itemId] || {};
+            const icon = inCat.iconUrl || "";
+            const rarity = (inCat.rarity || "").toLowerCase(); // Common|Rare|Unique|Legendary
+
+            toast(`${viewer} redeemed ${itemName}!`, icon, rarity, duration, showRarity ? inCat.rarity : "");
+          } catch(e) {}
+        };
+      }
+      connect();
+
+      // ---- UI helpers
+      function toast(text, iconUrl, rarity, ms, rarityLabel){
+        const el = document.createElement("div");
+        el.className = "toast";
+        el.innerHTML = `
+          ${iconUrl ? `<div class="icon" style="background-image:url('${escapeHtml(iconUrl)}')"></div>` : ""}
+          <div class="content">
+            <div class="line">${escapeHtml(text)}
+              ${rarityLabel ? `<span class="rarity ${rarityClass(rarity)}">${escapeHtml(rarityLabel)}</span>` : ""}
+            </div>
+          </div>
+        `.trim();
+        wrap.appendChild(el);
+        setTimeout(()=> { el.classList.add("exit"); setTimeout(()=>el.remove(), 320); }, ms);
+      }
+
+      function banner(title, sub){
+        const el = document.createElement("div");
+        el.className = "toast";
+        el.innerHTML = `<div class="content"><div class="line">${escapeHtml(title)}</div>${sub?`<div class="sub">${escapeHtml(sub)}</div>`:""}</div>`;
+        wrap.appendChild(el);
+      }
+
+      function rarityClass(k){
+        switch(k){
+          case "common": return "r-common";
+          case "rare": return "r-rare";
+          case "unique": return "r-unique";
+          case "legendary": return "r-legend";
+          default: return "";
+        }
+      }
+      function escapeHtml(s){
+        return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+      }
+    })();
+  </script>
+</body>
+</html>

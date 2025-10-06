@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Mxeaez Admin</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      :root {
+        --bg: #0b0b0d;
+        --panel: #121316;
+        --muted: #9aa0a6;
+        --text: #f1f5f9;
+        --border: #26272b;
+        --green: #22c55e;
+        --blue: #60a5fa;
+        --red: #ef4444;
+        --amber: #f59e0b;
+        --radius: 14px;
+        --pad: 14px;
+        --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+        --font: ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--font);
+      }
+      .app {
+        display: grid;
+        grid-template-columns: 1.2fr 1fr;
+        gap: 16px;
+        padding: 16px;
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+        overflow: hidden;
+      }
+      .head {
+        padding: 12px var(--pad);
+        border-bottom: 1px solid var(--border);
+        font-weight: 600;
+      }
+      .body {
+        padding: var(--pad);
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .btn {
+        background: #1f2937;
+        border: 1px solid var(--border);
+        color: #fff;
+        padding: 8px 12px;
+        border-radius: 10px;
+        cursor: pointer;
+      }
+      .btn:hover {
+        background: #263142;
+      }
+      .btn.red {
+        background: #3b1e1f;
+        border-color: #4a2324;
+      }
+      .btn.red:hover {
+        background: #4a2324;
+      }
+      .btn.green {
+        background: #1f2f24;
+        border-color: #234a32;
+      }
+      .btn.green:hover {
+        background: #234a32;
+      }
+      .input,
+      select {
+        background: #0f1115;
+        color: #fff;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 8px 10px;
+      }
+      .list {
+        max-height: 70vh;
+        overflow: auto;
+      }
+      .redeem {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--border);
+      }
+      .redeem:hover {
+        background: #14161a;
+      }
+      .av {
+        width: 32px;
+        height: 32px;
+        border-radius: 999px;
+        background: #222 center/cover no-repeat;
+        border: 1px solid var(--border);
+      }
+      .meta {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .pill {
+        font-size: 11px;
+        padding: 2px 6px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        margin-left: 6px;
+      }
+      .grid2 {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+      }
+      .mt {
+        margin-top: 10px;
+      }
+      .muted {
+        color: var(--muted);
+      }
+      .foot {
+        padding: 10px var(--pad);
+        border-top: 1px solid var(--border);
+        font-size: 12px;
+        color: var(--muted);
+      }
+      @media (max-width: 900px) {
+        .app {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <!-- Left: Redemption History -->
+      <div class="card">
+        <div class="head">Redemptions</div>
+        <div class="body">
+          <div class="row" style="gap: 8px; margin-bottom: 8px">
+            <input
+              id="channelId"
+              class="input"
+              placeholder="Channel ID"
+              style="width: 200px"
+            />
+            <input
+              id="adminKey"
+              class="input"
+              placeholder="Admin Key"
+              style="width: 200px"
+            />
+            <button class="btn" onclick="saveCreds()">Save</button>
+            <button class="btn" onclick="refresh()">Refresh</button>
+          </div>
+          <div id="list" class="list"></div>
+        </div>
+        <div class="foot">
+          Click a redemption to refund points + return item.
+        </div>
+      </div>
+
+      <!-- Right: Admin tools -->
+      <div class="card">
+        <div class="head">Admin Tools</div>
+        <div class="body">
+          <div class="grid2">
+            <div>
+              <div class="muted">Grant Item to User</div>
+              <input
+                id="grantLogin"
+                class="input mt"
+                placeholder="Twitch login (lowercase)"
+              />
+              <div class="row mt">
+                <select id="grantItem" class="input"></select>
+                <input
+                  id="grantQty"
+                  type="number"
+                  min="1"
+                  value="1"
+                  class="input"
+                  style="width: 80px"
+                />
+              </div>
+              <button class="btn green mt" onclick="grantItemToLogin()">
+                Grant
+              </button>
+              <div id="grantInfo" class="muted mt"></div>
+            </div>
+
+            <div>
+              <div class="muted">Grant Item to Active Viewers</div>
+              <div class="row mt">
+                <select id="grantAllItem" class="input"></select>
+                <input
+                  id="grantAllQty"
+                  type="number"
+                  min="1"
+                  value="1"
+                  class="input"
+                  style="width: 80px"
+                />
+                <input
+                  id="sinceMinItems"
+                  type="number"
+                  min="1"
+                  value="5"
+                  class="input"
+                  style="width: 100px"
+                  title="minutes"
+                />
+              </div>
+              <button class="btn green mt" onclick="grantItemToAll()">
+                Grant to Active
+              </button>
+            </div>
+
+            <div>
+              <div class="muted">Give Coins to User (StreamElements)</div>
+              <div class="row mt">
+                <input
+                  id="coinsLogin"
+                  class="input"
+                  placeholder="Twitch login"
+                />
+                <input
+                  id="coinsAmt"
+                  type="number"
+                  class="input"
+                  value="1000"
+                  style="width: 120px"
+                />
+              </div>
+              <button class="btn mt" onclick="giveCoinsUser()">
+                Give Coins
+              </button>
+            </div>
+
+            <div>
+              <div class="muted">Give Coins to Active Viewers</div>
+              <div class="row mt">
+                <input
+                  id="coinsAmtAll"
+                  type="number"
+                  class="input"
+                  value="500"
+                  style="width: 120px"
+                />
+                <input
+                  id="sinceMinCoins"
+                  type="number"
+                  min="1"
+                  value="5"
+                  class="input"
+                  style="width: 100px"
+                  title="minutes"
+                />
+              </div>
+              <button class="btn mt" onclick="giveCoinsAll()">
+                Give to Active
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="foot">
+          Presence = viewers who opened the panel in last N minutes.
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+
+      function loadCreds() {
+        $("channelId").value = localStorage.getItem("adm.channelId") || "";
+        $("adminKey").value = localStorage.getItem("adm.key") || "";
+      }
+      function saveCreds() {
+        localStorage.setItem("adm.channelId", $("channelId").value.trim());
+        localStorage.setItem("adm.key", $("adminKey").value.trim());
+      }
+      function headers() {
+        const key = $("adminKey").value.trim();
+        if (!key) throw new Error("Missing Admin Key");
+        return { "Content-Type": "application/json", "x-admin-key": key };
+      }
+
+      async function refresh() {
+        const channel = $("channelId").value.trim();
+        if (!channel) return alert("Enter Channel ID");
+        const r = await fetch(
+          `/admin/redemptions?channel_id=${encodeURIComponent(
+            channel
+          )}&limit=50`,
+          { headers: headers() }
+        );
+        const rows = await r.json();
+        renderList(rows);
+      }
+
+      function renderList(rows) {
+        const el = $("list");
+        el.innerHTML = "";
+        for (const r of rows) {
+          const d = new Date(r.createdAt);
+          const div = document.createElement("div");
+          div.className = "redeem";
+          div.innerHTML = `
+          <div class="av" style="background-image:url('${
+            (r.viewer && r.viewer.avatar) || ""
+          }')"></div>
+          <div style="flex:1">
+            <div><b>${escapeHtml(
+              (r.viewer && (r.viewer.login || r.viewer.userId)) || "Someone"
+            )}</b> redeemed <b>${escapeHtml(r.itemName)}</b></div>
+            <div class="meta">${d.toLocaleString()}</div>
+          </div>
+          <button class="btn red" title="Refund this redemption">Refund</button>
+        `;
+          div.querySelector("button").onclick = () => refund(r.id);
+          el.appendChild(div);
+        }
+      }
+
+      async function refund(redemptionId) {
+        const channel = $("channelId").value.trim();
+        if (!confirm("Refund this redemption?")) return;
+        const r = await fetch(`/admin/refund`, {
+          method: "POST",
+          headers: headers(),
+          body: JSON.stringify({
+            channel_id: channel,
+            redemption_id: redemptionId,
+          }),
+        });
+        if (!r.ok) return alert(await r.text());
+        refresh();
+      }
+
+      // --- Grant item to a single user by login: resolve to opaqueUserId, then grant
+      async function grantItemToLogin() {
+        const channel = $("channelId").value.trim();
+        const login = $("grantLogin").value.trim().toLowerCase();
+        const itemId = $("grantItem").value;
+        const qty = Number($("grantQty").value || 1);
+        const info = $("grantInfo");
+        info.textContent = "Resolving user…";
+
+        const userRes = await fetch(
+          `/admin/users/search?channel_id=${encodeURIComponent(
+            channel
+          )}&q=${encodeURIComponent(login)}`,
+          { headers: headers() }
+        );
+        const users = await userRes.json();
+        const u = users && users[0];
+        if (!u) {
+          info.textContent = "User not found.";
+          return;
+        }
+        if (!u.opaqueUserId) {
+          info.textContent =
+            "User has not opened the panel recently (no opaque id). Ask them to open the panel once.";
+          return;
+        }
+
+        const r = await fetch(`/admin/grant-item`, {
+          method: "POST",
+          headers: headers(),
+          body: JSON.stringify({
+            channel_id: channel,
+            itemId,
+            qty,
+            opaqueUserId: u.opaqueUserId,
+          }),
+        });
+        if (!r.ok) {
+          info.textContent = "Grant failed: " + (await r.text());
+          return;
+        }
+        info.textContent = `Granted ${qty} × ${itemId} to ${u.login}`;
+      }
+
+      async function grantItemToAll() {
+        const channel = $("channelId").value.trim();
+        const itemId = $("grantAllItem").value;
+        const qty = Number($("grantAllQty").value || 1);
+        const minutes = Number($("sinceMinItems").value || 5);
+        const r = await fetch(`/admin/grant-item-all`, {
+          method: "POST",
+          headers: headers(),
+          body: JSON.stringify({
+            channel_id: channel,
+            itemId,
+            qty,
+            sinceMinutes: minutes,
+          }),
+        });
+        const j = await r.json();
+        if (!r.ok) return alert(j.error || "Failed");
+        alert(
+          `Granted ${qty} × ${itemId} to ${j.viewers} active viewers (wrote ${j.granted} items)`
+        );
+      }
+
+      async function giveCoinsUser() {
+        const login = $("coinsLogin").value.trim().toLowerCase();
+        const amt = Number($("coinsAmt").value || 0);
+        if (!login || !amt) return alert("Enter login and amount");
+        const r = await fetch(`/admin/grant-coins`, {
+          method: "POST",
+          headers: headers(),
+          body: JSON.stringify({ login, amount: amt }),
+        });
+        if (!r.ok) return alert(await r.text());
+        alert(`Gave ${amt} coins to ${login}`);
+      }
+
+      async function giveCoinsAll() {
+        const channel = $("channelId").value.trim();
+        const amt = Number($("coinsAmtAll").value || 0);
+        const minutes = Number($("sinceMinCoins").value || 5);
+        const r = await fetch(`/admin/grant-coins-all`, {
+          method: "POST",
+          headers: headers(),
+          body: JSON.stringify({
+            channel_id: channel,
+            amount: amt,
+            sinceMinutes: minutes,
+          }),
+        });
+        const j = await r.json();
+        if (!r.ok) return alert(j.error || "Failed");
+        alert(`Gave ${amt} coins to ${j.granted} active viewers`);
+      }
+
+      function escapeHtml(s) {
+        return String(s).replace(
+          /[&<>"']/g,
+          (c) =>
+            ({
+              "&": "&amp;",
+              "<": "&lt;",
+              ">": "&gt;",
+              '"': "&quot;",
+              "'": "&#39;",
+            }[c])
+        );
+      }
+
+      async function loadItems() {
+        // need admin headers for this one
+        const r = await fetch("/admin/items", { headers: headers() });
+        if (!r.ok) {
+          console.error("Failed to load admin items", await r.text());
+          return;
+        }
+        const { items, grantOnlyIds } = await r.json();
+        const grantOnly = new Set(grantOnlyIds || []);
+
+        // sort by rarity then name (optional, looks nicer)
+        const order = { Common: 0, Rare: 1, Unique: 2, Legendary: 3 };
+        items.sort((a, b) => {
+          const ra = order[a.rarity] ?? 99,
+            rb = order[b.rarity] ?? 99;
+          if (ra !== rb) return ra - rb;
+          return a.name.localeCompare(b.name);
+        });
+
+        for (const id of ["grantItem", "grantAllItem"]) {
+          const sel = document.getElementById(id);
+          if (!sel) continue;
+          sel.innerHTML = "";
+          for (const it of items) {
+            const opt = document.createElement("option");
+            const tag = grantOnly.has(it.id) ? " • grant-only" : "";
+            opt.value = it.id;
+            opt.textContent = `${it.name} (${it.rarity}${tag})`;
+            sel.appendChild(opt);
+          }
+        }
+      }
+
+      loadCreds();
+      loadItems();
+      refresh();
+    </script>
+  </body>
+</html>

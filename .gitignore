@@ -1,0 +1,20 @@
+# Node / TypeScript
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# Editor / OS
+.DS_Store
+.vscode/
+*.log
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+
+# Firebase / GCP creds (if any)
+firebase-debug.log
+*.serviceAccount*.json
+*.key.json
