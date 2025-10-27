@@ -523,6 +523,7 @@ export default function MxeaezShopPanel() {
 
   // NEW: store channel id for WS connection
   const [channelId, setChannelId] = useState<string | null>(null);
+  const [panelVisible, setPanelVisible] = useState(false);
 
   // NEW: current viewer opaque id (to target per-user grant events)
   const viewerOpaqueRef = useRef<string | null>(null);
@@ -613,6 +614,7 @@ export default function MxeaezShopPanel() {
     // Twitch panel visibility (fires when panel opens/becomes visible)
     const ext = (window as any)?.Twitch?.ext;
     const onVisChanged = (isVisible: boolean) => {
+      setPanelVisible(isVisible);
       if (isVisible && tokenRef.current) refreshNow(tokenRef.current);
     };
     if (ext?.onVisibilityChanged) {
@@ -643,7 +645,7 @@ export default function MxeaezShopPanel() {
   }, []);
 
   useEffect(() => {
-    if (!channelId) return;
+    if (!channelId || !panelVisible) return;
 
     // Build ws:// or wss:// using your EBS_BASE host
     const host = new URL(EBS_BASE).host;
@@ -687,7 +689,7 @@ export default function MxeaezShopPanel() {
       };
 
       ws.onclose = () => {
-        if (!closed) setTimeout(connect, 1500); // retry on drop
+        if (!closed && panelVisible) setTimeout(connect, 1500);
       };
       ws.onerror = () => {
         // let onclose retry
@@ -699,14 +701,14 @@ export default function MxeaezShopPanel() {
     return () => {
       closed = true;
       try {
-        if(ws) {
+        if (ws) {
           ws.close();
         }
       } catch (err) {
         void err;
       }
     };
-  }, [channelId]);
+  }, [channelId, panelVisible]);
 
   async function refreshMe(tok: string) {
     const me = await fetch(`${EBS_BASE}/me`, {
