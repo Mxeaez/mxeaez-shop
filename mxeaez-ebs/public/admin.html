@@ -133,6 +133,14 @@
       .muted {
         color: var(--muted);
       }
+      .hidden {
+        display: none;
+      }
+      .login-wrap {
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+      }
       .foot {
         padding: 10px var(--pad);
         border-top: 1px solid var(--border);
@@ -147,27 +155,56 @@
     </style>
   </head>
   <body>
-    <div class="app">
+    <div id="loginView" class="login-wrap">
+      <div class="card" style="width: min(520px, 92vw); padding: 20px">
+        <div class="head">Admin Sign In</div>
+        <div class="body">
+          <div class="row" style="margin-bottom: 10px">
+            <div style="width: 110px; color: var(--muted)">Username</div>
+            <input
+              id="adminUser"
+              class="input"
+              placeholder="Username"
+              style="flex: 1"
+            />
+          </div>
+          <div class="row" style="margin-bottom: 10px">
+            <div style="width: 110px; color: var(--muted)">Admin Key</div>
+            <input
+              id="adminKey"
+              class="input"
+              type="password"
+              placeholder="••••••••••"
+              style="flex: 1"
+            />
+          </div>
+          <div class="row" style="justify-content: flex-end; gap: 8px">
+            <button class="btn" onclick="clearCreds()">Clear</button>
+            <button class="btn" onclick="signIn()">Sign In</button>
+          </div>
+          <div
+            id="loginError"
+            style="display: none; color: #ef4444; margin-top: 8px"
+          ></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="appView" class="app hidden">
+      <div class="card" style="grid-column: 1 / -1; padding: 10px 14px">
+        <div class="row" style="justify-content: space-between">
+          <div class="muted">Shop Admin</div>
+          <div class="row" style="gap: 8px">
+            <button class="btn" onclick="refresh()">Refresh</button>
+            <button class="btn" onclick="signOut()">Sign out</button>
+          </div>
+        </div>
+      </div>
+
       <!-- Left: Redemption History -->
       <div class="card">
         <div class="head">Redemptions</div>
         <div class="body">
-          <div class="row" style="gap: 8px; margin-bottom: 8px">
-            <input
-              id="channelId"
-              class="input"
-              placeholder="Channel ID"
-              style="width: 200px"
-            />
-            <input
-              id="adminKey"
-              class="input"
-              placeholder="Admin Key"
-              style="width: 200px"
-            />
-            <button class="btn" onclick="saveCreds()">Save</button>
-            <button class="btn" onclick="refresh()">Refresh</button>
-          </div>
           <div id="list" class="list"></div>
         </div>
         <div class="foot">
@@ -230,52 +267,6 @@
                 Grant to Active
               </button>
             </div>
-
-            <div>
-              <div class="muted">Give Coins to User (StreamElements)</div>
-              <div class="row mt">
-                <input
-                  id="coinsLogin"
-                  class="input"
-                  placeholder="Twitch login"
-                />
-                <input
-                  id="coinsAmt"
-                  type="number"
-                  class="input"
-                  value="1000"
-                  style="width: 120px"
-                />
-              </div>
-              <button class="btn mt" onclick="giveCoinsUser()">
-                Give Coins
-              </button>
-            </div>
-
-            <div>
-              <div class="muted">Give Coins to Active Viewers</div>
-              <div class="row mt">
-                <input
-                  id="coinsAmtAll"
-                  type="number"
-                  class="input"
-                  value="500"
-                  style="width: 120px"
-                />
-                <input
-                  id="sinceMinCoins"
-                  type="number"
-                  min="1"
-                  value="5"
-                  class="input"
-                  style="width: 100px"
-                  title="minutes"
-                />
-              </div>
-              <button class="btn mt" onclick="giveCoinsAll()">
-                Give to Active
-              </button>
-            </div>
           </div>
         </div>
         <div class="foot">
@@ -287,31 +278,147 @@
     <script>
       const $ = (id) => document.getElementById(id);
 
-      function loadCreds() {
-        $("channelId").value = localStorage.getItem("adm.channelId") || "";
-        $("adminKey").value = localStorage.getItem("adm.key") || "";
-      }
-      function saveCreds() {
-        localStorage.setItem("adm.channelId", $("channelId").value.trim());
-        localStorage.setItem("adm.key", $("adminKey").value.trim());
-      }
       function headers() {
-        const key = $("adminKey").value.trim();
-        if (!key) throw new Error("Missing Admin Key");
-        return { "Content-Type": "application/json", "x-admin-key": key };
+        const u = localStorage.getItem("adm.user") || "";
+        const k = localStorage.getItem("adm.key") || "";
+        return {
+          "Content-Type": "application/json",
+          "x-admin-user": u,
+          "x-admin-key": k,
+        };
+      }
+
+      function clearCreds() {
+        localStorage.removeItem("adm.user");
+        localStorage.removeItem("adm.key");
+        const u = $("adminUser");
+        if (u) u.value = "";
+        const k = $("adminKey");
+        if (k) k.value = "";
       }
 
       async function refresh() {
-        const channel = $("channelId").value.trim();
-        if (!channel) return alert("Enter Channel ID");
-        const r = await fetch(
-          `/admin/redemptions?channel_id=${encodeURIComponent(
-            channel
-          )}&limit=50`,
-          { headers: headers() }
-        );
+        const r = await fetch(`/admin/redemptions?limit=50`, {
+          headers: headers(),
+        });
+        if (!r.ok) {
+          if (r.status === 401 || r.status === 403) {
+            signOut();
+            return;
+          }
+          alert(await r.text());
+          return;
+        }
         const rows = await r.json();
         renderList(rows);
+      }
+
+      function showLogin() {
+        console.log("[admin] showLogin");
+        const lv = $("loginView");
+        const av = $("appView");
+        if (lv) {
+          lv.classList.remove("hidden");
+          lv.style.display = "";
+        }
+        if (av) {
+          av.classList.add("hidden");
+          av.style.display = "none";
+        }
+        const e = $("loginError");
+        if (e) {
+          e.textContent = "";
+          e.style.display = "none";
+        }
+      }
+
+      function showApp(username) {
+        console.log("[admin] showApp for", username);
+        const lv = $("loginView");
+        const av = $("appView");
+        if (lv) {
+          lv.classList.add("hidden");
+          lv.style.display = "none";
+        }
+        if (av) {
+          av.classList.remove("hidden");
+          av.style.display = "";
+        }
+      }
+
+      async function probeAuth() {
+        try {
+          // Probe the same guarded endpoint your UI uses
+          const r = await fetch("/admin/redemptions?limit=1", {
+            headers: headers(),
+          });
+          console.log("[admin] probeAuth status", r.status);
+          return r.ok;
+        } catch (e) {
+          console.warn("[admin] probeAuth failed", e);
+          return false;
+        }
+      }
+
+      async function signIn() {
+        const err = $("loginError");
+        if (err) {
+          err.textContent = "";
+          err.style.display = "none";
+        }
+
+        const user = ($("adminUser")?.value || "").trim().toLowerCase();
+        const key = ($("adminKey")?.value || "").trim();
+
+        if (!user || !key) {
+          if (err) {
+            err.textContent = "Enter both username and admin key.";
+            err.style.display = "block";
+          }
+          return;
+        }
+
+        // Save creds that headers() uses
+        localStorage.setItem("adm.user", user);
+        localStorage.setItem("adm.key", key);
+        console.log("[admin] saved creds", { user });
+
+        const ok = await probeAuth();
+        if (!ok) {
+          clearCreds();
+          if (err) {
+            err.textContent = "Invalid credentials or not whitelisted.";
+            err.style.display = "block";
+          }
+          return;
+        }
+
+        // Success: show app
+        showApp(user);
+
+        // Load data with guards so UI still flips even if these throw
+        try {
+          if (typeof loadItems === "function") {
+            console.log("[admin] loadItems()");
+            await loadItems();
+          }
+        } catch (e) {
+          console.warn("[admin] loadItems failed", e);
+        }
+
+        try {
+          if (typeof refresh === "function") {
+            console.log("[admin] refresh()");
+            await refresh();
+          }
+        } catch (e) {
+          console.warn("[admin] refresh failed", e);
+        }
+      }
+
+      function signOut() {
+        clearCreds();
+        showLogin();
       }
 
       function renderList(rows) {
@@ -339,13 +446,11 @@
       }
 
       async function refund(redemptionId) {
-        const channel = $("channelId").value.trim();
         if (!confirm("Refund this redemption?")) return;
         const r = await fetch(`/admin/refund`, {
           method: "POST",
           headers: headers(),
           body: JSON.stringify({
-            channel_id: channel,
             redemption_id: redemptionId,
           }),
         });
@@ -355,7 +460,6 @@
 
       // --- Grant item to a single user by login: resolve to opaqueUserId, then grant
       async function grantItemToLogin() {
-        const channel = $("channelId").value.trim();
         const login = $("grantLogin").value.trim().toLowerCase();
         const itemId = $("grantItem").value;
         const qty = Number($("grantQty").value || 1);
@@ -363,11 +467,10 @@
         info.textContent = "Resolving user…";
 
         const userRes = await fetch(
-          `/admin/users/search?channel_id=${encodeURIComponent(
-            channel
-          )}&q=${encodeURIComponent(login)}`,
+          `/admin/users/search?q=${encodeURIComponent(login)}`,
           { headers: headers() }
         );
+
         const users = await userRes.json();
         const u = users && users[0];
         if (!u) {
@@ -384,7 +487,6 @@
           method: "POST",
           headers: headers(),
           body: JSON.stringify({
-            channel_id: channel,
             itemId,
             qty,
             opaqueUserId: u.opaqueUserId,
@@ -398,7 +500,6 @@
       }
 
       async function grantItemToAll() {
-        const channel = $("channelId").value.trim();
         const itemId = $("grantAllItem").value;
         const qty = Number($("grantAllQty").value || 1);
         const minutes = Number($("sinceMinItems").value || 5);
@@ -406,7 +507,6 @@
           method: "POST",
           headers: headers(),
           body: JSON.stringify({
-            channel_id: channel,
             itemId,
             qty,
             sinceMinutes: minutes,
@@ -417,37 +517,6 @@
         alert(
           `Granted ${qty} × ${itemId} to ${j.viewers} active viewers (wrote ${j.granted} items)`
         );
-      }
-
-      async function giveCoinsUser() {
-        const login = $("coinsLogin").value.trim().toLowerCase();
-        const amt = Number($("coinsAmt").value || 0);
-        if (!login || !amt) return alert("Enter login and amount");
-        const r = await fetch(`/admin/grant-coins`, {
-          method: "POST",
-          headers: headers(),
-          body: JSON.stringify({ login, amount: amt }),
-        });
-        if (!r.ok) return alert(await r.text());
-        alert(`Gave ${amt} coins to ${login}`);
-      }
-
-      async function giveCoinsAll() {
-        const channel = $("channelId").value.trim();
-        const amt = Number($("coinsAmtAll").value || 0);
-        const minutes = Number($("sinceMinCoins").value || 5);
-        const r = await fetch(`/admin/grant-coins-all`, {
-          method: "POST",
-          headers: headers(),
-          body: JSON.stringify({
-            channel_id: channel,
-            amount: amt,
-            sinceMinutes: minutes,
-          }),
-        });
-        const j = await r.json();
-        if (!r.ok) return alert(j.error || "Failed");
-        alert(`Gave ${amt} coins to ${j.granted} active viewers`);
       }
 
       function escapeHtml(s) {
@@ -497,9 +566,30 @@
         }
       }
 
-      loadCreds();
-      loadItems();
-      refresh();
+      (async function boot() {
+        try {
+          const u = localStorage.getItem("adm.user");
+          const k = localStorage.getItem("adm.key");
+          if (u && k) {
+            console.log("[admin] found saved creds for", u);
+            if (await probeAuth()) {
+              showApp(u);
+              try {
+                if (typeof loadItems === "function") await loadItems();
+              } catch {}
+              try {
+                if (typeof refresh === "function") await refresh();
+              } catch {}
+              return;
+            }
+          }
+          clearCreds();
+          showLogin();
+        } catch (e) {
+          console.warn("[admin] boot error", e);
+          showLogin();
+        }
+      })();
     </script>
   </body>
 </html>

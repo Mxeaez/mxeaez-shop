@@ -8,7 +8,7 @@ import { FieldValue } from "firebase-admin/firestore";
 import { ITEMS, GRANT_ONLY_IDS } from "./items";
 import { verifyTwitchToken } from "./auth";
 import { getSePoints, addUserPointsDelta } from "./streamelements";
-import { getLoginFromUserId, getUserByLogin } from "./twitch";
+import { getLoginFromUserId, getUserByLogin, getUserById } from "./twitch";
 import path = require("path");
 
 // ---- Firebase Admins
@@ -19,20 +19,45 @@ try {
 }
 const db = admin.firestore();
 
+const ALLOW_ORIGINS = [
+  /^https:\/\/extensions\.twitch\.tv$/, // some panels render from here
+  /^https:\/\/localhost\.twitch\.tv$/, // Hosted Test
+  /^https:\/\/([a-z0-9-]+\.)*ext-twitch\.tv$/, // your panel CDN subdomain
+  /^https:\/\/([a-z0-9-]+\.)*twitch\.tv$/, // twitch site (broad, safe)
+  /^http:\/\/localhost(:\d+)?$/, // local dev
+  /^http:\/\/127\.0\.0\.1(:\d+)?$/, // local dev
+];
+
 // ---- Express
 const app = express();
 app.use(express.json());
-app.use(
-  cors({
-    origin: [
-      /^https:\/\/([a-z0-9-]+\.)*twitch\.tv$/, // twitch site
-      /^https:\/\/([a-z0-9-]+\.)*ext-twitch\.tv$/, // extensions CDN (Hosted Test/Live)
-      "http://localhost:5173", // local dev panel
-    ],
-    methods: ["GET", "POST"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
+app.use((req, res, next) => {
+  const origin = req.headers.origin || "";
+  const allowed = ALLOW_ORIGINS.some((re) => re.test(origin));
+
+  if (allowed) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin, Access-Control-Request-Method, Access-Control-Request-Headers");
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    // Echo back whatever the browser asked to send
+    const acrh = req.headers["access-control-request-headers"];
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      (typeof acrh === "string" && acrh) || "authorization, content-type, x-requested-with"
+    );
+    const acrm = req.headers["access-control-request-method"];
+    res.setHeader(
+      "Access-Control-Allow-Methods",
+      (typeof acrm === "string" && acrm) || "GET, POST, OPTIONS"
+    );
+    res.setHeader("Access-Control-Max-Age", "86400");
+  }
+
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(allowed ? 204 : 403);
+  }
+  next();
+});
 app.use(express.static(path.join(process.cwd(), "public")));
 
 // Paths
@@ -49,6 +74,63 @@ const KC_DELTAS: Record<string, number> = {
   kc_25000: 25000,
   kc_50000: 50000,
 };
+
+type Rarity = "Common" | "Rare" | "Unique" | "Legendary";
+
+// Odds as you requested
+const BOX_ODDS = {
+  Legendary: 1 / 5000,
+  Unique: 1 / 25,
+  Rare: 1 / 5,
+} as const;
+
+function chooseRarity(): Rarity {
+  const r = Math.random();
+  const pL = BOX_ODDS.Legendary;
+  const pU = BOX_ODDS.Unique;
+  const pR = BOX_ODDS.Rare;
+  if (r < pL) return "Legendary";
+  if (r < pL + pU) return "Unique";
+  if (r < pL + pU + pR) return "Rare";
+  return "Common";
+}
+
+function pickMysteryPrize() {
+  // If you *do* want to exclude some specific ids, add them to this set.
+  const EXCLUDE = new Set<string>(["mystery_box"]);
+
+  // Pool now contains all items except the box itself (grant-only items included)
+  const pool = ITEMS.filter((i) => !EXCLUDE.has(i.id));
+
+  const want = chooseRarity();
+  const order: Rarity[] =
+    want === "Legendary"
+      ? ["Legendary", "Unique", "Rare", "Common"]
+      : want === "Unique"
+      ? ["Unique", "Rare", "Common"]
+      : want === "Rare"
+      ? ["Rare", "Common"]
+      : ["Common"];
+
+  for (const r of order) {
+    const bucket = pool.filter((i) => i.rarity === r);
+    if (bucket.length) {
+      return bucket[Math.floor(Math.random() * bucket.length)];
+    }
+  }
+
+  // Absolute fallback (shouldn’t happen): anything except the box itself
+  const any = ITEMS.filter((i) => i.id !== "mystery_box");
+  return any[Math.floor(Math.random() * any.length)];
+}
+
+const ADMIN_CHANNEL_ID = (process.env.ADMIN_CHANNEL_ID || "").trim();
+const ADMIN_KEY_RAW = (process.env.ADMIN_KEY || "").trim();
+const ADMIN_USERS_RAW = (process.env.ADMIN_USERS || "").trim();
+
+const ADMIN_USERS = ADMIN_USERS_RAW.split(/[;,]/)
+  .map((s) => s.replace(/\\,/g, ",").trim().toLowerCase())
+  .filter(Boolean);
 
 // --- API: catalog
 app.get("/catalog", (_req, res) => {
@@ -68,6 +150,18 @@ app.get("/me", async (req, res) => {
     const channelId = claims.channel_id;
     const opaqueUserId = claims.opaque_user_id;
     const twitchUserId: string | undefined = (claims as any).user_id;
+    let login: string | undefined;
+
+    let coins = 0;
+    let needsIdShare = true;
+
+    if (twitchUserId) {
+      needsIdShare = false;
+      login = await getLoginFromUserId(twitchUserId); // from twitch.ts
+      console.log("[/me] user_id:", twitchUserId);
+      console.log("[/me] login:", login);
+      if (login) coins = await getSePoints(login); // from streamelements.ts
+    }
 
     // keep a simple profile/presence doc we can query later
     await db
@@ -79,6 +173,7 @@ app.get("/me", async (req, res) => {
         {
           opaqueUserId: claims.opaque_user_id,
           userId: (claims as any).user_id || null,
+          login: login || null,
           lastSeen: FieldValue.serverTimestamp(),
         },
         { merge: true }
@@ -102,17 +197,6 @@ app.get("/me", async (req, res) => {
       }))
       .filter((e) => allowed.has(e.id));
 
-    let coins = 0;
-    let needsIdShare = true;
-
-    if (twitchUserId) {
-      needsIdShare = false;
-      const login = await getLoginFromUserId(twitchUserId); // from twitch.ts
-      console.log("[/me] user_id:", twitchUserId);
-      console.log("[/me] login:", login);
-      if (login) coins = await getSePoints(login); // from streamelements.ts
-    }
-
     res.json({ coins, inventory, needsIdShare });
   } catch (e) {
     console.error("[/me]", e);
@@ -128,7 +212,9 @@ app.get("/admin", requireAdmin, (req, res) => {
 // List latest redemptions (with joined names/icons where we can)
 app.get("/admin/redemptions", requireAdmin, async (req, res) => {
   try {
-    const channelId = String(req.query.channel_id || "");
+    const channelId = getChannelId(req);
+    if (!channelId)
+      return res.status(400).json({ error: "channel_id not configured" });
     const limit = Math.min(Number(req.query.limit || 50), 200);
     if (!channelId)
       return res.status(400).json({ error: "channel_id required" });
@@ -140,37 +226,28 @@ app.get("/admin/redemptions", requireAdmin, async (req, res) => {
 
     const rows = await Promise.all(
       snap.docs.map(async (d) => {
-        const r = d.data();
-        const userId = r.viewer?.userId || r.userId || null;
-        const login = r.viewer?.login || r.login || null;
+        const r = d.data() || {};
+        const v = r.viewer || {};
 
-        // Try to ensure we have a display login + avatar
-        let name = login;
-        let avatar = null;
-        try {
-          if (!name && userId) {
-            name = await getLoginFromUserId(userId);
-          }
-          if (name) {
-            const u = await getUserByLogin(name); // you likely have this
-            avatar = u?.profile_image_url || null;
-          }
-        } catch {}
+        let login = v.login || r.login || null;
+        let displayName = v.displayName || null;
+        let avatar = v.avatar || null;
 
         return {
           id: d.id,
           itemId: r.itemId,
           itemName: r.itemName || r.itemId,
           createdAt: r.createdAt?.toMillis?.() || Date.now(),
-          viewer: {
-            login: name || null,
-            userId: userId || null,
-            opaqueUserId: r.opaqueUserId || r.viewer?.opaqueUserId || null,
-            avatar,
-          },
           awardedPoints: r.awardedPoints || 0,
           target: r.target || null,
           text: r.text || null,
+          viewer: {
+            login,
+            displayName,
+            avatar,
+            userId: v.userId || r.userId || null,
+            opaqueUserId: v.opaqueUserId || r.opaqueUserId || null,
+          },
         };
       })
     );
@@ -181,10 +258,16 @@ app.get("/admin/redemptions", requireAdmin, async (req, res) => {
   }
 });
 
+app.get("/admin/ping", requireAdmin, (req, res) => {
+  res.json({ ok: true, who: (req as any).adminUser });
+});
+
 // Refund a redemption: give item back + reverse SE points if present
 app.post("/admin/refund", requireAdmin, async (req, res) => {
   try {
-    const channelId = String(req.body.channel_id || "");
+    const channelId = getChannelId(req);
+    if (!channelId)
+      return res.status(400).json({ error: "channel_id not configured" });
     const redemptionId = String(req.body.redemption_id || "");
     if (!channelId || !redemptionId)
       return res
@@ -235,7 +318,9 @@ app.post("/admin/refund", requireAdmin, async (req, res) => {
 // Search user by login (resolve to our known profile)
 app.get("/admin/users/search", requireAdmin, async (req, res) => {
   try {
-    const channelId = String(req.query.channel_id || "");
+    const channelId = getChannelId(req);
+    if (!channelId)
+      return res.status(400).json({ error: "channel_id not configured" });
     const q = String(req.query.q || "")
       .trim()
       .toLowerCase();
@@ -289,7 +374,9 @@ app.get("/admin/users/search", requireAdmin, async (req, res) => {
 // Grant items to a specific user (by opaque if we have it, else reject)
 app.post("/admin/grant-item", requireAdmin, async (req, res) => {
   try {
-    const channelId = String(req.body.channel_id || "");
+    const channelId = getChannelId(req);
+    if (!channelId)
+      return res.status(400).json({ error: "channel_id not configured" });
     const itemId = String(req.body.itemId || "");
     const qty = Math.max(1, Number(req.body.qty || 1));
     const opaque = String(req.body.opaqueUserId || "");
@@ -328,7 +415,9 @@ app.post("/admin/grant-item", requireAdmin, async (req, res) => {
 // Grant item to all active viewers (last N minutes)
 app.post("/admin/grant-item-all", requireAdmin, async (req, res) => {
   try {
-    const channelId = String(req.body.channel_id || "");
+    const channelId = getChannelId(req);
+    if (!channelId)
+      return res.status(400).json({ error: "channel_id not configured" });
     const itemId = String(req.body.itemId || "");
     const qty = Math.max(1, Number(req.body.qty || 1));
     const minutes = Math.max(
@@ -400,7 +489,9 @@ app.post("/admin/grant-coins", requireAdmin, async (req, res) => {
 // Give SE coins to all active viewers (by presence -> login)
 app.post("/admin/grant-coins-all", requireAdmin, async (req, res) => {
   try {
-    const channelId = String(req.body.channel_id || "");
+    const channelId = getChannelId(req);
+    if (!channelId)
+      return res.status(400).json({ error: "channel_id not configured" });
     const amount = Number(req.body.amount || 0);
     const minutes = Math.max(
       1,
@@ -498,52 +589,99 @@ app.post("/buy", async (req, res) => {
 // --- API: redeem
 app.post("/redeem", async (req, res) => {
   try {
-    const claims = verifyTwitchToken(req.headers.authorization);
-    const itemId = String(req.body.itemId);
-    const col = invCol(claims.channel_id, claims.opaque_user_id);
-    const twitchUserId: string | undefined = (claims as any).user_id;
-    let login: string | undefined;
-    const targetRaw =
-      typeof req.body?.target === "string" ? req.body.target : undefined;
-    const target = targetRaw ? targetRaw.trim().replace(/^@/, "") : undefined;
-    // Optional TTS text (from panel)
-    const textRaw =
-      typeof req.body?.text === "string" ? req.body.text : undefined;
-    const text = textRaw ? textRaw.slice(0, 500).trim() : undefined; // 500 cap for safety
+    const claims = verifyTwitchToken(req.headers.authorization || "");
+    const itemId = String(req.body.itemId || "");
+    const target = (req.body && req.body.target) || null; // e.g., timeout target
+    const text = (req.body && req.body.text) || null; // e.g., TTS text
+    if (!itemId) return res.status(400).json({ error: "itemId required" });
+
+    // ✅ Define the item FIRST (prevents "Cannot access 'item' before initialization")
+    const item = ITEMS.find((i) => i.id === itemId);
+    if (!item) return res.status(400).json({ error: "Unknown itemId" });
+
+    const channelId = claims.channel_id;
+    const opaque = claims.opaque_user_id;
+    const twitchUserId: string | null = (claims as any).user_id || null;
+
+    // Build rich viewer meta before any transaction
+    const viewer = {
+      opaqueUserId: opaque || null,
+      userId: twitchUserId,
+      login: null as string | null,
+      displayName: null as string | null,
+      avatar: null as string | null,
+    };
 
     if (twitchUserId) {
       try {
-        login = await getLoginFromUserId(twitchUserId);
+        const u = await getUserById(twitchUserId);
+        if (u) {
+          viewer.login = u.login || null;
+          viewer.displayName = u.displayName || u.login || null;
+          viewer.avatar = u.profileImageUrl || null;
+        }
       } catch (e) {
-        console.warn("[/redeem] getLoginFromUserId failed:", e);
+        console.warn("[redeem] getUserById failed:", (e as any)?.message);
       }
     }
 
-    try {
-      await db.runTransaction(async (tx) => {
-        const q = col
-          .where("itemId", "==", itemId)
-          .orderBy("acquiredAt", "desc")
-          .limit(1);
+    // If we still don't have a login but we have presence, try presence doc (optional)
+    if (!viewer.login && opaque) {
+      try {
+        const pres = await db
+          .collection("channels")
+          .doc(channelId)
+          .collection("users")
+          .doc(opaque)
+          .get();
+        viewer.login = pres.data()?.login || viewer.login;
+      } catch {}
+    }
 
-        const snap = await tx.get(q);
-        if (snap.empty) throw new Error("NO_ITEM");
+    // Find and delete the latest inventory doc for this item
+    const col = db
+      .collection("channels")
+      .doc(channelId)
+      .collection("users")
+      .doc(opaque)
+      .collection("inventory");
+    const q = await col
+      .where("itemId", "==", itemId)
+      .orderBy("acquiredAt", "desc")
+      .limit(1)
+      .get();
 
-        tx.delete(snap.docs[0].ref);
-        tx.set(redemptionsCol(claims.channel_id).doc(), {
-          opaqueUserId: claims.opaque_user_id,
+    if (q.empty)
+      return res.status(400).json({ error: "No such item in inventory" });
+
+    const invDocRef = q.docs[0].ref;
+
+    // Write the redemption row (rich viewer + keep legacy fields)
+    await db.runTransaction(async (tx) => {
+      tx.delete(invDocRef);
+      tx.set(
+        db
+          .collection("channels")
+          .doc(channelId)
+          .collection("redemptions")
+          .doc(),
+        {
           itemId,
+          itemName: item.name,
           target: target || null,
           text: text || null,
           createdAt: FieldValue.serverTimestamp(),
-        });
-      });
-    } catch (err: any) {
-      if (err?.message === "NO_ITEM") {
-        return res.status(400).json({ error: "No such item in inventory" });
-      }
-      throw err; // let outer catch handle it
-    }
+
+          // rich nested viewer (future-proof)
+          viewer,
+
+          // legacy top-level fields (keep old code working)
+          opaqueUserId: viewer.opaqueUserId,
+          userId: viewer.userId,
+          login: viewer.login,
+        }
+      );
+    });
 
     // ---- KC award (optional; only if it’s one of the KC items)
     let awardedPoints = 0;
@@ -551,8 +689,8 @@ app.post("/redeem", async (req, res) => {
     const grant = KC_DELTAS[itemId] ?? 0; // <-- define grant here
     if (grant > 0 && twitchUserId) {
       try {
-        if (login) {
-          await addUserPointsDelta(login, grant); // positive delta adds points
+        if (viewer.login) {
+          await addUserPointsDelta(viewer.login, grant); // positive delta adds points
           awardedPoints = grant;
         }
       } catch (e) {
@@ -560,52 +698,41 @@ app.post("/redeem", async (req, res) => {
       }
     }
 
+    // Optional: Mystery Box prize after the transaction
     let prizeId: string | undefined;
-
-    // (Optional) Mystery Box example: grant a random SELLABLE prize
     if (itemId === "mystery_box") {
-      const pool = ITEMS.filter((i) => i.id !== "mystery_box");
-      if (pool.length) {
-        const prize = pool[Math.floor(Math.random() * pool.length)];
-        prizeId = prize.id;
-        await db
-          .collection("channels")
-          .doc(claims.channel_id)
-          .collection("users")
-          .doc(claims.opaque_user_id)
-          .collection("inventory")
-          .add({ itemId: prize.id, acquiredAt: FieldValue.serverTimestamp() });
+      const prize = pickMysteryPrize();
+      prizeId = prize.id;
 
-        broadcastToChannel(claims.channel_id, {
-          type: "mystery",
-          prizeId: prize.id,
-          prizeName: prize.name,
-          at: Date.now(),
-        });
-      }
+      await db
+        .collection("channels")
+        .doc(claims.channel_id)
+        .collection("users")
+        .doc(claims.opaque_user_id)
+        .collection("inventory")
+        .add({ itemId: prize.id, acquiredAt: FieldValue.serverTimestamp() });
+
+      broadcastToChannel(claims.channel_id, {
+        type: "mystery",
+        prizeId: prize.id,
+        prizeName: prize.name,
+        rarity: prize.rarity,
+        at: Date.now(),
+      });
     }
-
-    // Nice-to-have: human item name
-    const item = ITEMS.find((i) => i.id === itemId);
-
-    // ---- Notify all bridge clients for this channel
-    broadcastToChannel(claims.channel_id, {
+    // Notify bridges/overlay/admin listeners
+    broadcastToChannel(channelId, {
       type: "redeem",
-      channelId: claims.channel_id,
+      channelId,
       itemId,
-      itemName: item?.name ?? itemId,
-      viewer: {
-        opaqueUserId: claims.opaque_user_id,
-        userId: twitchUserId || null,
-        login: login || null,
-      },
+      itemName: item.name,
+      viewer, // includes login/displayName/avatar now
       target: target || null,
       text: text || null,
-      awardedPoints, // > 0 only for KC items
       at: Date.now(),
     });
 
-    return res.json({ ok: true, awardedPoints, prizeId });
+    return res.json({ ok: true, prizeId });
   } catch (e: any) {
     res.status(401).json({ error: e.message });
   }
@@ -679,6 +806,13 @@ app.post("/sell", async (req, res) => {
   }
 });
 
+function getChannelId(req: any): string {
+  // Allow override for multi-channel future, but default to env
+  return String(
+    req.body?.channel_id || req.query?.channel_id || ADMIN_CHANNEL_ID
+  ).trim();
+}
+
 // --- WebSocket for local bridge
 
 const wss = new WebSocketServer({ noServer: true });
@@ -717,11 +851,24 @@ function broadcastToChannel(channelId: string, payload: any) {
 }
 
 // --- ADMIN AUTH MIDDLEWARE ---
-function requireAdmin(req, res, next) {
-  const key = req.get("x-admin-key");
-  if (!process.env.ADMIN_KEY || key !== process.env.ADMIN_KEY) {
-    return res.status(401).json({ error: "Unauthorized" });
+function requireAdmin(req: any, res: any, next: any) {
+  const user = String(req.get("x-admin-user") || "")
+    .trim()
+    .toLowerCase();
+  const key = String(req.get("x-admin-key") || "").trim();
+
+  if (!ADMIN_KEY_RAW || !ADMIN_USERS.length || !ADMIN_CHANNEL_ID) {
+    return res.status(500).json({ error: "Admin not configured" });
   }
+  if (key !== ADMIN_KEY_RAW) {
+    // optional: console.warn("[admin] bad key from", user);
+    return res.status(401).json({ error: "Invalid admin key" });
+  }
+  if (!ADMIN_USERS.includes(user)) {
+    // optional: console.warn("[admin] not whitelisted:", user);
+    return res.status(403).json({ error: "User not whitelisted" });
+  }
+  (req as any).adminUser = user;
   next();
 }
 

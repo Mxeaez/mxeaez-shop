@@ -100,3 +100,26 @@ export async function getUserByLogin(login: string): Promise<HelixUser | null> {
   setCached(loginCache, key, user);
   return user;
 }
+
+// Returns { id, login, displayName, profileImageUrl } for a single user id
+export async function getUserById(userId: string): Promise<{
+  id: string;
+  login: string;
+  displayName: string;
+  profileImageUrl: string;
+} | null> {
+  if (!TW_CLIENT_ID || !TW_CLIENT_SECRET) return null;
+  const token = await getAppToken();
+  const r = await axios.get(`https://api.twitch.tv/helix/users?id=${userId}`, {
+    headers: { "Client-ID": TW_CLIENT_ID, Authorization: `Bearer ${token}` },
+  });
+  const u = r.data?.data?.[0];
+  if (!u) return null;
+  return {
+    id: u.id,
+    login: (u.login || "").toLowerCase(),
+    displayName: u.display_name || u.login || "",
+    profileImageUrl: u.profile_image_url || "",
+  };
+}
+

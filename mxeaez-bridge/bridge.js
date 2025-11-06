@@ -10,9 +10,8 @@ const path = require("path");
 
 // ===================== CONFIG ======================
 const CHANNEL_ID = process.env.CHANNEL_ID || "45264995";
-const EBS_WS =
-  process.env.EBS_WS ||
-  `wss://mxeaez-ebs-719163725353.us-central1.run.app/bridge?channel_id=${CHANNEL_ID}`;
+const EBS_WS = process.env.EBS_WS;
+if (!EBS_WS) log("EBS_WS not set; bridge will not connect to cloud");
 
 // OBS (v5) defaults
 const OBS_URL = process.env.OBS_URL || "ws://127.0.0.1:4455";
@@ -152,12 +151,18 @@ async function sbDoAction(actionNameOrObj, args = {}) {
 
 // ===================== OBS HELPERS ====================
 let obs;
-async function ensureObs() {
+async function ensureObs(opts = { optional: false }) {
   if (obs) return obs;
-  obs = new OBSWebSocket();
-  await obs.connect(OBS_URL, OBS_PASSWORD);
-  log("OBS connected");
-  return obs;
+  const client = new OBSWebSocket();
+  try {
+    await client.connect(OBS_URL, OBS_PASSWORD);
+    obs = client;
+    log("OBS connected");
+    return obs;
+  } catch (e) {
+    if (opts.optional) return null; // caller decides to retry later
+    throw e;
+  }
 }
 
 async function getCurrentSceneName() {
@@ -705,11 +710,17 @@ const HANDLERS = {
   // ----- Common -----
   dramatic_zoom: async (ctx) => {
     log("Dramatic Zoom by", who(ctx));
-    await zoomInPlaceTemporarily(WEBCAM_SOURCE, 1.5, EFFECT_DURATIONS_MS.dramatic_zoom, "", {
-      biasX: 10,
-      biasY: -0.6,
-    });
-    playSound("dramatic_zoom");
+    await zoomInPlaceTemporarily(
+      WEBCAM_SOURCE,
+      1.5,
+      EFFECT_DURATIONS_MS.dramatic_zoom,
+      "",
+      {
+        biasX: 10,
+        biasY: -0.6,
+      }
+    );
+    //playSound("dramatic_zoom");
   },
   spongebob_stfu: async (ctx) => {
     log("SpongeBob STFU by", who(ctx));
@@ -729,7 +740,10 @@ const HANDLERS = {
     log("Rave party by", who(ctx));
     await obsPlaySfx("rave");
     // Let your local controller / Streamer.bot handle Hue flash
-    await hit("/hue/rave", { seconds: EFFECT_DURATIONS_MS.rave, viewer: who(ctx) });
+    await hit("/hue/rave", {
+      seconds: EFFECT_DURATIONS_MS.rave,
+      viewer: who(ctx),
+    });
   },
   tts_message: async (ctx) => {
     log("TTS message by", who(ctx));
@@ -755,14 +769,19 @@ const HANDLERS = {
 
     // Optional: little SFX feedback in stream
     try {
-      await obsPlaySfx("voice_changer");
+      //await obsPlaySfx("voice_changer");
     } catch {}
   },
   camera_flip: async () => {
-    await flipVerticalInPlaceTemporarily(WEBCAM_SOURCE, EFFECT_DURATIONS_MS.camera_flip, "", {
-      offsetY: 345,
-    });
-    await obsPlaySfx("camera_flip"); // if you have a whoosh, etc.
+    await flipVerticalInPlaceTemporarily(
+      WEBCAM_SOURCE,
+      EFFECT_DURATIONS_MS.camera_flip,
+      "",
+      {
+        offsetY: 345,
+      }
+    );
+    //await obsPlaySfx("camera_flip"); // if you have a whoosh, etc.
   },
   tiny_cam: async () => {
     await tinyInPlaceTemporarily(
@@ -804,7 +823,10 @@ const HANDLERS = {
   },
   notice_me_senpai: async (ctx) => {
     log("Notice Me Senpai by", who(ctx));
-    await hit("/overlay/notice", { viewer: who(ctx), seconds: EFFECT_DURATIONS_MS.notice_me_senpai });
+    await hit("/overlay/notice", {
+      viewer: who(ctx),
+      seconds: EFFECT_DURATIONS_MS.notice_me_senpai,
+    });
   },
   mute_streamer: async (ctx) => {
     log("Mute Streamer by", who(ctx));
@@ -812,7 +834,10 @@ const HANDLERS = {
   },
   fullscreen_cam: async (ctx) => {
     log("Fullscreen cam by", who(ctx));
-    await fullscreenTemporarily(WEBCAM_SOURCE, EFFECT_DURATIONS_MS.fullscreen_cam);
+    await fullscreenTemporarily(
+      WEBCAM_SOURCE,
+      EFFECT_DURATIONS_MS.fullscreen_cam
+    );
   },
   mystery_box: async (ctx) => {
     log("Mystery box opened by", who(ctx));
@@ -842,14 +867,62 @@ function dedupeKey(msg) {
 }
 setInterval(() => recent.clear(), 10000);
 
+async function armObsGating() {
+  const o = await ensureObs({ optional: true });
+  if (!o) {
+    log("OBS not reachable; retrying in 60s");
+    setTimeout(armObsGating, 60000);
+    return;
+  }
+
+  // helper to compute desired WS state and connect/close accordingly
+  async function updateWantWs() {
+    try {
+      const [s, r] = await Promise.all([
+        o.call("GetStreamStatus"), // { outputActive: boolean }
+        o.call("GetRecordStatus"), // { outputActive: boolean }
+      ]);
+
+      const shouldConnect = !!(s?.outputActive || r?.outputActive);
+
+      if (shouldConnect && !wantWs) {
+        wantWs = true;
+        connect(); // your existing connect() guards against double-connects
+      } else if (!shouldConnect && wantWs) {
+        wantWs = false;
+        if (ws) {
+          try { ws.close(); } catch {}
+        }
+      }
+    } catch (e) {
+      log("updateWantWs failed:", e?.message || e);
+    }
+  }
+
+  // initial snapshot
+  await updateWantWs();
+
+  // react to OBS state changes
+  o.on("StreamStateChanged",      () => updateWantWs());
+  o.on("RecordStateChanged",      () => updateWantWs());
+
+  // If you later want VirtualCam to count as "live", also add:
+  // o.on("VirtualcamStateChanged", () => updateWantWs());
+}
+
+let ws;
+let wantWs = false;
+
 function connect() {
+  if (!EBS_WS || !wantWs || ws) return;
   log("connecting to", EBS_WS);
-  const ws = new WebSocket(EBS_WS);
+  ws = new WebSocket(EBS_WS);
 
   ws.on("open", () => log("connected"));
   ws.on("close", () => {
     log("disconnected; retrying in 1500ms");
-    setTimeout(connect, 1500);
+    ws = null;
+    if (wantWs) setTimeout(connect, 1500);
   });
   ws.on("error", (e) => log("ws error", e.message));
 
@@ -867,6 +940,7 @@ function connect() {
       if (recent.has(key)) return;
       recent.add(key);
 
+      console.log("[bridge] msg", { type: msg.type, action: msg.action, ts: Date.now() });
       const handler = HANDLERS[msg.itemId];
       if (!handler) return log("[bridge] no handler for", msg.itemId);
 
@@ -888,7 +962,6 @@ function connect() {
 
     if (msg.type === "mystery" && msg.prizeId) {
       log(`Mystery prize: ${msg.prizeName || msg.prizeId}`);
-      playSound("mystery");
     }
   });
 
@@ -998,5 +1071,5 @@ const TEST_DURATIONS_MS = {
   }
 
   // Default: normal run (connect to EBS)
-  connect();
+  armObsGating();
 })();

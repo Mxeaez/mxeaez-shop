@@ -648,10 +648,10 @@ export default function MxeaezShopPanel() {
     if (!channelId || !panelVisible) return;
 
     // Build ws:// or wss:// using your EBS_BASE host
-    const host = new URL(EBS_BASE).host;
+    const base = new URL(EBS_BASE);
     const wsUrl =
-      (location.protocol === "https:" ? "wss://" : "ws://") +
-      host +
+      (base.protocol === "https:" ? "wss://" : "ws://") +
+      base.host +
       `/bridge?channel_id=${encodeURIComponent(channelId)}`;
 
     let ws: WebSocket | null = null;

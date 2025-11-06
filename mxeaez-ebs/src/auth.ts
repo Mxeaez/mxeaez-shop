@@ -1,7 +1,8 @@
 // src/auth.ts
 import jwt from "jsonwebtoken";
 
-const SECRET = Buffer.from(process.env.EXT_SECRET!, "base64");
+const EXT_SECRET = Buffer.from(String(process.env.EXT_SECRET || ""), "base64");
+export const HAS_EXT_SECRET = !!process.env.EXT_SECRET;
 
 export type TwitchClaims = {
   channel_id: string;
@@ -13,7 +14,7 @@ export type TwitchClaims = {
 export function verifyTwitchToken(bearer?: string): TwitchClaims {
   if (!bearer?.startsWith("Bearer ")) throw new Error("Missing bearer");
   const token = bearer.slice(7);
-  const decoded = jwt.verify(token, SECRET, { algorithms: ["HS256"] }) as any;
+  const decoded = jwt.verify(token, EXT_SECRET, { algorithms: ["HS256"] }) as any;
   if (!decoded?.channel_id || !decoded?.opaque_user_id) {
     throw new Error("Bad claims");
   }
