@@ -37,13 +37,17 @@ app.use((req, res, next) => {
 
   if (allowed) {
     res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader("Vary", "Origin, Access-Control-Request-Method, Access-Control-Request-Headers");
+    res.setHeader(
+      "Vary",
+      "Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
+    );
     res.setHeader("Access-Control-Allow-Credentials", "true");
     // Echo back whatever the browser asked to send
     const acrh = req.headers["access-control-request-headers"];
     res.setHeader(
       "Access-Control-Allow-Headers",
-      (typeof acrh === "string" && acrh) || "authorization, content-type, x-requested-with"
+      (typeof acrh === "string" && acrh) ||
+        "authorization, content-type, x-requested-with"
     );
     const acrm = req.headers["access-control-request-method"];
     res.setHeader(
@@ -720,8 +724,11 @@ app.post("/redeem", async (req, res) => {
         at: Date.now(),
       });
     }
+
+    console.log("[redeem] preparing broadcast", { channelId, itemId });
+
     // Notify bridges/overlay/admin listeners
-    broadcastToChannel(channelId, {
+    const sent = broadcastToChannel(channelId, {
       type: "redeem",
       channelId,
       itemId,
@@ -731,6 +738,8 @@ app.post("/redeem", async (req, res) => {
       text: text || null,
       at: Date.now(),
     });
+
+    console.log("[redeem] broadcast sent to %d sockets", sent);
 
     return res.json({ ok: true, prizeId });
   } catch (e: any) {
@@ -827,20 +836,27 @@ function registerChannelSocket(channelId: string, ws: WebSocket) {
     channelSockets.set(channelId, set);
   }
   set.add(ws);
+  console.log("[ws] join ch=%s now=%d", channelId, set.size);
 
   ws.on("close", () => {
     const s = channelSockets.get(channelId);
     if (s) {
       s.delete(ws);
+      console.log("[ws] leave ch=%s now=%d", channelId, set.size);
       if (s.size === 0) channelSockets.delete(channelId);
     }
   });
 }
 
 function broadcastToChannel(channelId: string, payload: any) {
-  const set = channelSockets.get(channelId);
-  if (!set) return;
+  const key = String(channelId); // normalize!
+  const set = channelSockets.get(key);
   const data = JSON.stringify(payload);
+  const bytes = Buffer.byteLength(data);
+
+  console.log("[broadcast] ch=%s sockets=%d bytes=%d", key, set?.size ?? 0, bytes);
+  if (!set) return;
+
   for (const ws of set) {
     if (ws.readyState === WebSocket.OPEN) {
       try {

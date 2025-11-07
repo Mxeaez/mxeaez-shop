@@ -23,7 +23,7 @@ export const ITEMS = [
   //{ id: "notice_me_senpai", name: "Notice Me Senpai", description: "Have your name displayed on stream for 5 minutes.", cost: 25000, rarity: "Unique", iconUrl: "https://i.imgur.com/dWS8drx.png" },
   { id: "mute_streamer", name: "Mute", description: "Force mute mic for 10 seconds.", cost: 25000, rarity: "Unique", iconUrl: "https://i.imgur.com/RchSsRd.png" },
   //{ id: "fullscreen_cam", name: "Full Screen Webcam", description: "Make the face cam full screen for 5 seconds.", cost: 25000, rarity: "Unique", iconUrl: "https://i.imgur.com/F2HEkc0.png" },
-  { id: "mystery_box", name: "Mystery Box", description: "Could contain anything! It could even be a mystery box!", cost: 25000, rarity: "Unique", iconUrl: "https://i.imgur.com/N1ES3oc.png" },
+  { id: "mystery_box", name: "Mystery Box", description: "Could contain anything! It could even be a mystery box!", cost: 2500, rarity: "Unique", iconUrl: "https://i.imgur.com/N1ES3oc.png" },
 
   // ========================= Legendary (50000) =========================
   { id: "kc_50000", name: "50000 KC Points", description: "Redeem 50000 KC Points.", cost: 50000, rarity: "Legendary", iconUrl: "https://i.imgur.com/z4w8bxa.png" },
